@@ -11,12 +11,13 @@ type
   TDAFJSON = class
   private
     FFieldSise: Integer;
-    procedure ProcessJsonSO(Result: TClientDataSet; joJSON: ISuperObject; FieldChild: TFieldDef = nil);
-    procedure FillCDSFromJsonSO(JSON: string; var cds: TClientDataSet);
+    procedure ProcessJsonSO(Result: TDataSet; joJSON: ISuperObject; FieldChild: TFieldDef = nil);
+    procedure FillCDSFromJsonSO(JSON: string; var cds: TDataSet);
   public
     constructor Create;
     property FieldSise: Integer read FFieldSise write FFieldSise;
-    class function CreateCDSFromJsonSO(JSON: string; FieldChild: TFieldDef = nil; cdsName: string = 'MainDataset'): TClientDataSet;
+    class function CreateCDSFromJsonSO(JSON: string; FieldChild: TFieldDef = nil; cdsName: string = 'MainDataset'): TDataSet;
+    class function GetFieldDetail(Source: TDataSet; FieldName: string): TField;
     class function GetObjectJSON(SuperObject: ISuperObject; Name: WideString): ISuperObject;
 
     class procedure SetJson(SuperObject: ISuperObject; Name: WideString; Value: Boolean); overload;
@@ -29,17 +30,51 @@ type
 implementation
 
 uses
-  StrUtils,
-  ConfigDypeDBUtils, DAF_Types;
+  StrUtils, SysUtils;
+
+procedure CreateField(AMemData: TDataSet; pName: string; pDataType: TFieldType; pSize: Integer = 0; pRequired: Boolean = False); overload;
+begin
+  if (AMemData <> nil) and (pName <> '') then
+  begin
+    with AMemData.FieldDefs.AddFieldDef do
+    begin
+      Name := pName;
+      DataType := pDataType;
+      Size := pSize;
+      Required := pRequired;
+      CreateField(AMemData);
+    end;
+  end;
+end;
+
+procedure CreateField(AMemData: TDataSet; pName: string; pDisplayName: string; pDataType: TFieldType; pSize: Integer = 0; pRequired: Boolean = False); overload;
+begin
+  if (AMemData <> nil) and (pName <> '') then
+  begin
+    CreateField(AMemData, pName, pDataType, pSize, pRequired);
+    AMemData.FieldByName(pName).DisplayLabel := pDisplayName;
+  end;
+end;
+
+procedure CreateChildField(AField: TFieldDef; pName: string; pDataType: TFieldType; pSize: Integer = 0; pRequired: Boolean = False);
+begin
+  with AField.AddChild do
+  begin
+    Name := pName;
+    DataType := pDataType;
+    Size := pSize;
+    Required := pRequired;
+  end;
+end;
 
 { TDAFJSON }
 
 constructor TDAFJSON.Create;
 begin
-  FFieldSise := 255;
+  FFieldSise := 32000;
 end;
 
-class function TDAFJSON.CreateCDSFromJsonSO(JSON: string; FieldChild: TFieldDef; cdsName: string): TClientDataSet;
+class function TDAFJSON.CreateCDSFromJsonSO(JSON: string; FieldChild: TFieldDef; cdsName: string): TDataSet;
 var
   oJSON: ISuperObject;
   DAFJson: TDAFJSON;
@@ -53,7 +88,7 @@ begin
     DAFJson.ProcessJsonSO(Result, oJSON, FieldChild);
     if ((FieldChild = nil) and (Result.FieldCount > 0)) then
     begin
-      Result.CreateDataSet;
+      TClientDataSet(Result).CreateDataSet;
       DAFJson.FillCDSFromJsonSO(JSON, Result);
     end;
   finally
@@ -61,7 +96,7 @@ begin
   end;
 end;
 
-procedure TDAFJSON.FillCDSFromJsonSO(JSON: string; var cds: TClientDataSet);
+procedure TDAFJSON.FillCDSFromJsonSO(JSON: string; var cds: TDataSet);
 var
   ArrayItem: TSuperAvlEntry;
   ArrayItens: ISuperObject;
@@ -69,7 +104,7 @@ var
   FieldName: string;
   FieldValue: string;
   joJSON: ISuperObject;
-  cdsNested: TClientDataSet;
+  cdsNested: TDataSet;
   Item: TSuperAvlEntry;
 begin
   joJSON := SO(JSON);
@@ -80,12 +115,12 @@ begin
     begin
       if Item.Value.IsType(stArray) then
       begin
-        cdsNested := TClientDataSet(TDataSetField(cds.FieldByName(Item.Name)).NestedDataSet);
+        cdsNested := TDataSetField(cds.FieldByName(Item.Name)).NestedDataSet;
         FillCDSFromJsonSO(Item.Value.AsString, cdsNested);
       end
       else if Item.Value.IsType(stObject) then
       begin
-        cdsNested := TClientDataSet(TDataSetField(cds.FieldByName(Item.Name)).NestedDataSet);
+        cdsNested := TDataSetField(cds.FieldByName(Item.Name)).NestedDataSet;
         FillCDSFromJsonSO(Item.Value.AsString, cdsNested);
       end
       else
@@ -107,12 +142,12 @@ begin
         FieldValue := ArrayItem.Value.AsString;
         if ArrayItem.Value.IsType(stObject) then
         begin
-          cdsNested := TClientDataSet(TDataSetField(cds.FieldByName(FieldName)).NestedDataSet);
+          cdsNested := TDataSetField(cds.FieldByName(FieldName)).NestedDataSet;
           FillCDSFromJsonSO(FieldValue, cdsNested);
         end
         else if ArrayItem.Value.IsType(stArray) then
         begin
-          cdsNested := TClientDataSet(TDataSetField(cds.FieldByName(FieldName)).NestedDataSet);
+          cdsNested := TDataSetField(cds.FieldByName(FieldName)).NestedDataSet;
           FillCDSFromJsonSO(FieldValue, cdsNested);
         end
         else
@@ -123,6 +158,16 @@ begin
       cds.Post;
     end;
   end;
+end;
+
+class function TDAFJSON.GetFieldDetail(Source: TDataSet; FieldName: string): TField;
+begin
+  Result := Source.FindField(FieldName);
+  if Result = nil then
+    raise Exception.Create('Não foi encontrado o field ' + FieldName);
+
+  if Result.DataType <> ftDataSet then
+    raise Exception.Create('O Field ' + FieldName + ' não é um detail!');
 end;
 
 class function TDAFJSON.GetObjectJSON(SuperObject: ISuperObject; Name: WideString): ISuperObject;
@@ -145,8 +190,8 @@ begin
   end;
 end;
 
-procedure TDAFJSON.ProcessJsonSO(Result: TClientDataSet; joJSON: ISuperObject; FieldChild: TFieldDef);
-  procedure CreateFieldsSO(ArrayItem: TSuperAvlEntry; Result: TClientDataSet; FieldChild: TFieldDef);
+procedure TDAFJSON.ProcessJsonSO(Result: TDataSet; joJSON: ISuperObject; FieldChild: TFieldDef);
+  procedure CreateFieldsSO(ArrayItem: TSuperAvlEntry; Result: TDataSet; FieldChild: TFieldDef);
   var
     FieldName, FieldValue: string;
     Item: TSuperAvlEntry;
@@ -192,11 +237,6 @@ procedure TDAFJSON.ProcessJsonSO(Result: TClientDataSet; joJSON: ISuperObject; F
           CreateCDSFromJsonSO(FieldValue, Result.FieldDefs.Find(FieldName), FieldName + 'Detail');
         end;
       end;
-
-//      for Item in ArrayItem.Value.AsObject do
-//      begin
-//        CreateFieldsSO(Item, Result, FieldChild);
-//      end;
     end
     else
     begin
