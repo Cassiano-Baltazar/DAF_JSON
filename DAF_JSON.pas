@@ -22,22 +22,20 @@ type
     class function CreateCDSFromJsonSO(JSON: string; FieldChild: TFieldDef = nil; cdsName: string = 'MainDataset'): TClientDataSet;
     class function GetFieldDetail(Source: TDataSet; FieldName: string): TField;
     class function GetObjectJSON(SuperObject: ISuperObject; Name: WideString): ISuperObject;
-
-    //Mormot
-    class function CreateCDSFromJson(sJson: string; AOwner: TComponent = nil; cdsName: string = 'MainDataset'): TClientDataSet;
-
-
     class procedure SetJson(SuperObject: ISuperObject; Name: WideString; Value: Boolean); overload;
     class procedure SetJson(SuperObject: ISuperObject; Name: WideString; Value: Double); overload;
     class procedure SetJson(SuperObject: ISuperObject; Name: WideString; Value: Int64); overload;
     class procedure SetJson(SuperObject: ISuperObject; Name: WideString; Value: ISuperObject); overload;
     class procedure SetJson(SuperObject: ISuperObject; Name: WideString; Value: WideString); overload;
+
+    //Mormot
+    class function CreateCDSFromJson(sJson: string; cdsName: string = 'MainDataset'): TClientDataSet;
   end;
 
 implementation
 
 uses
-  StrUtils, SysUtils, SynCommons, Variants, DypeSysUtils;
+  StrUtils, SysUtils, SynCommons, Variants;
 
 procedure CreateFieldDef(AMemData: TDataSet; pName: string; pDataType: TFieldType; pSize: Integer = 0; pRequired: Boolean = False); overload;
 begin
@@ -46,7 +44,10 @@ begin
     with AMemData.FieldDefs.AddFieldDef do
     begin
       Name := pName;
-      DataType := pDataType;
+      if pDataType = ftInteger then
+        DataType := DB.ftCurrency
+      else
+        DataType := pDataType;
       Size := pSize;
       Required := pRequired;
     end;
@@ -60,7 +61,10 @@ begin
     with AMemData.FieldDefs.AddFieldDef do
     begin
       Name := pName;
-      DataType := pDataType;
+      if pDataType = ftInteger then
+        DataType := DB.ftCurrency
+      else
+        DataType := pDataType;
       Size := pSize;
       Required := pRequired;
       CreateField(AMemData);
@@ -82,7 +86,10 @@ begin
   with AField.AddChild do
   begin
     Name := pName;
-    DataType := pDataType;
+    if pDataType = ftInteger then
+      DataType := DB.ftCurrency
+    else
+      DataType := pDataType;
     Size := pSize;
     Required := pRequired;
   end;
@@ -202,17 +209,23 @@ begin
   end;
 end;
 
-class function TDAFJSON.CreateCDSFromJson(sJson: string; AOwner: TComponent; cdsName: string): TClientDataSet;
+class function TDAFJSON.CreateCDSFromJson(sJson: string; cdsName: string): TClientDataSet;
 var
   DAFJson: TDAFJSON;
+  tmpstr: RawUTF8;
 begin
   DAFJson := TDAFJSON.Create;
   try
-    Result := TClientDataSet.Create(AOwner);
-    Result.Name := GenerateUniqueName(AOwner, cdsName);
-    DAFJson.ProcessJson(_Json(UTF8Encode(sJson)), Result);
+    Result := TClientDataSet.Create(nil);
+    Result.Name := cdsName;
+{$IFDEF UNICODE}
+    tmpstr := UTF8Encode(sJson);
+{$ELSE}
+    tmpstr := sJson;
+{$ENDIF}
+    DAFJson.ProcessJson(_Json(tmpstr), Result);
     Result.CreateDataSet;
-    DAFJson.FillCDSFromJson(_Json(UTF8Encode(sJson)), Result);
+    DAFJson.FillCDSFromJson(_Json(tmpstr), Result);
   finally
     DAFJson.Free;
   end;
@@ -274,7 +287,7 @@ procedure TDAFJSON.ProcessJson(vJson: Variant; cds: TClientDataSet; FieldDef: TF
 var
   dvdJson: TDocVariantData;
   I: Integer;
-  V: Variant;
+  FieldValue, V: Variant;
   FieldName: string;
   FieldType: TFieldType;
   FieldSize: Integer;
@@ -332,10 +345,11 @@ begin
     for I := 0 to dvdJson.Count - 1 do
     begin
       FieldName := UTF8ToString(dvdJson.Names[I]);
+      FieldValue := dvdJson.Values[I];
       if not Value then
       begin
         FieldSize := 0;
-        case VarType(dvdJson.Values[I]) and VarTypeMask of
+        case VarType(FieldValue) and VarTypeMask of
           varEmpty:
           begin
             FieldType := ftString;
@@ -405,7 +419,7 @@ begin
         end;
       end;
 
-      V := _JsonFast(UTF8Encode(VarToStr(dvdJson.Values[I])));
+      V := _JsonFast(UTF8Encode(VarToStr(FieldValue)));
       if TDocVariantData(V).Kind = dvUndefined then
         CreateField(V, cds, FieldDef)
       else
