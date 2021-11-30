@@ -3,7 +3,7 @@ unit DAF_JSON;
 interface
 
 uses
-  superobject, DB, DBClient, Classes;
+  DB, DBClient, Classes;
 
 function RemoveReservedChar(s:WideString): WideString;
 
@@ -11,25 +11,20 @@ type
   TDAFJSON = class
   private
     FFieldSise: Integer;
-    procedure ProcessJsonSO(var Result: TClientDataSet; joJSON: ISuperObject; FieldChild: TFieldDef = nil); overload;
-    procedure FillCDSFromJsonSO(const joJSON: ISuperObject; var cds: TClientDataSet); overload;
     //Mormot
     procedure ProcessJson(vJson: Variant; cds: TClientDataSet; FieldDef: TFieldDef = nil; Value: Boolean = False);
     procedure FillCDSFromJson(vJson: Variant; cds: TClientDataSet);
   public
     constructor Create;
     property FieldSise: Integer read FFieldSise write FFieldSise;
-    class function CreateCDSFromJsonSO(JSON: string; FieldChild: TFieldDef = nil; cdsName: string = 'MainDataset'): TClientDataSet;
     class function GetFieldDetail(Source: TDataSet; FieldName: string): TField;
-    class function GetObjectJSON(SuperObject: ISuperObject; Name: WideString): ISuperObject;
-    class procedure SetJson(SuperObject: ISuperObject; Name: WideString; Value: Boolean); overload;
-    class procedure SetJson(SuperObject: ISuperObject; Name: WideString; Value: Double); overload;
-    class procedure SetJson(SuperObject: ISuperObject; Name: WideString; Value: Int64); overload;
-    class procedure SetJson(SuperObject: ISuperObject; Name: WideString; Value: ISuperObject); overload;
-    class procedure SetJson(SuperObject: ISuperObject; Name: WideString; Value: WideString); overload;
 
     //Mormot
     class function CreateCDSFromJson(sJson: string; cdsName: string = 'MainDataset'): TClientDataSet;
+    class function GetPropertyFromJSON(Json: Variant; Name: string): Variant;
+    class procedure SetPropertyToJson(var Json: Variant; const Name: string; const Value: Variant);
+
+    class function String2JSON(Source: string; LineBreak: string = '<br />'): string;
   end;
 
 implementation
@@ -109,13 +104,34 @@ var
   V: Variant;
   cdsNested: TClientDataSet;
   FieldName: string;
+  Field: TField;
 begin
   dvdJson := TDocVariantData(vJson);
   if dvdJson.Kind = dvArray then
   begin
-    for I := 0 to dvdJson.Count - 1 do
+    V := _JsonFast(UTF8Encode(VarToStr(dvdJson.Values[0])));
+    if TDocVariantData(V).Kind = dvUndefined then
     begin
-      FillCDSFromJson(dvdJson.Values[I], cds);
+      for I := 0 to dvdJson.Count - 1 do
+      begin
+        if cds.IsEmpty then
+          cds.Insert
+        else
+          cds.Append;
+
+        Field := cds.FindField('Value');
+        if Field <> nil then
+          Field.Value := dvdJson.Values[I];
+
+        cds.Post;
+      end;
+    end
+    else
+    begin
+      for I := 0 to dvdJson.Count - 1 do
+      begin
+        FillCDSFromJson(dvdJson.Values[I], cds);
+      end;
     end;
   end
   else if dvdJson.Kind = dvObject then
@@ -128,84 +144,26 @@ begin
     begin
       FieldName := UTF8ToString(dvdJson.Names[I]);
       V := _JsonFast(UTF8Encode(VarToStr(dvdJson.Values[I])));
-      if TDocVariantData(V).Kind <> dvUndefined then
-      begin
-        if not((TDocVariantData(V).Kind = dvArray) and (TDocVariantData(V).Count = 0)) then
+      try
+        if TDocVariantData(V).Kind <> dvUndefined then
         begin
-          cdsNested := TClientDataSet(TDataSetField(cds.FieldByName(FieldName)).NestedDataSet);
-          FillCDSFromJson(dvdJson.Values[I], TClientDataSet(cdsNested));
-        end;
-      end
-      else
-      begin
-        if cds.FindField(FieldName) <> nil then
-          cds.FieldByName(FieldName).Value := dvdJson.Values[I];
-      end;
-    end;
-    cds.Post;
-  end;
-end;
-
-procedure TDAFJSON.FillCDSFromJsonSO(const joJSON: ISuperObject; var cds: TClientDataSet);
-var
-  ArrayItem: TSuperAvlEntry;
-  ArrayItens: ISuperObject;
-  I: Integer;
-  FieldName: string;
-  FieldValue: string;
-  cdsNested: TDataSet;
-  Item: TSuperAvlEntry;
-begin
-  if joJSON.IsType(stObject) then
-  begin
-    cds.Append;
-    for Item in joJSON.AsObject do
-    begin
-      if Item.Value.IsType(stArray) then
-      begin
-        cdsNested := TDataSetField(cds.FieldByName(Item.Name)).NestedDataSet;
-        FillCDSFromJsonSO(Item.Value, TClientDataSet(cdsNested));
-      end
-      else if Item.Value.IsType(stObject) then
-      begin
-        cdsNested := TDataSetField(cds.FieldByName(Item.Name)).NestedDataSet;
-        FillCDSFromJsonSO(Item.Value, TClientDataSet(cdsNested));
-      end
-      else
-      begin
-        if cds.FindField(Item.Name) <> nil then // todo - verificar pq a venda com chave 43160502308702000405650010000002371000002370 dá exception de field tef_bandeira not found
-          cds.FieldByName(Item.Name).AsString := Item.Value.AsString;
-      end;
-    end;
-    cds.Post;
-  end
-  else if joJSON.IsType(stArray) then
-  begin
-    for I := 0 to joJSON.AsArray.Length - 1 do
-    begin
-      ArrayItens := joJSON.AsArray[I];
-      cds.Append;
-      for ArrayItem in ArrayItens.AsObject do
-      begin
-        FieldName := ArrayItem.Name;
-        FieldValue := ArrayItem.Value.AsString;
-        if ArrayItem.Value.IsType(stObject) then
-        begin
-          cdsNested := TDataSetField(cds.FieldByName(FieldName)).NestedDataSet;
-          FillCDSFromJsonSO(ArrayItem.Value, TClientDataSet(cdsNested));
-        end
-        else if ArrayItem.Value.IsType(stArray) then
-        begin
-          cdsNested := TDataSetField(cds.FieldByName(FieldName)).NestedDataSet;
-          FillCDSFromJsonSO(ArrayItem.Value, TClientDataSet(cdsNested));
+          if not((TDocVariantData(V).Kind = dvArray) and (TDocVariantData(V).Count = 0)) then
+          begin
+            cdsNested := TClientDataSet(TDataSetField(cds.FieldByName(FieldName)).NestedDataSet);
+            FillCDSFromJson(dvdJson.Values[I], TClientDataSet(cdsNested));
+          end;
         end
         else
         begin
-          cds.FieldByName(FieldName).AsString := FieldValue;
+          Field := cds.FindField(FieldName);
+          if Field <> nil then
+            Field.Value := dvdJson.Values[I];
         end;
+      finally
+        TDocVariantData(V).Clear;
       end;
-      cds.Post;
     end;
+    cds.Post;
   end;
 end;
 
@@ -213,40 +171,27 @@ class function TDAFJSON.CreateCDSFromJson(sJson: string; cdsName: string): TClie
 var
   DAFJson: TDAFJSON;
   tmpstr: RawUTF8;
+  Json: Variant;
 begin
   DAFJson := TDAFJSON.Create;
   try
     Result := TClientDataSet.Create(nil);
     Result.Name := cdsName;
-{$IFDEF UNICODE}
-    tmpstr := UTF8Encode(sJson);
-{$ELSE}
-    tmpstr := sJson;
-{$ENDIF}
-    DAFJson.ProcessJson(_Json(tmpstr), Result);
-    Result.CreateDataSet;
-    DAFJson.FillCDSFromJson(_Json(tmpstr), Result);
-  finally
-    DAFJson.Free;
-  end;
-end;
-
-class function TDAFJSON.CreateCDSFromJsonSO(JSON: string; FieldChild: TFieldDef; cdsName: string): TClientDataSet;
-var
-  oJSON: ISuperObject;
-  DAFJson: TDAFJSON;
-begin
-  DAFJson := TDAFJSON.Create;
-  try
-    Result := TClientDataSet.Create(nil);
-    Result.Name := cdsName;
-
-    oJSON := SO(JSON);
-    DAFJson.ProcessJsonSO(Result, oJSON, FieldChild);
-    if Result.FieldDefs.Count > 0 then
+    if System.SysUtils.Trim(sJson) <> '' then
     begin
-      Result.CreateDataSet;
-      DAFJson.FillCDSFromJsonSO(oJSON, Result);
+{$IFDEF UNICODE}
+      tmpstr := UTF8Encode(sJson);
+{$ELSE}
+      tmpstr := sJson;
+{$ENDIF}
+      Json := _JsonFast(tmpstr);
+      try
+        DAFJson.ProcessJson(Json, Result);
+        Result.CreateDataSet;
+        DAFJson.FillCDSFromJson(Json, Result);
+      finally
+        TDocVariantData(Json).Clear;
+      end;
     end;
   finally
     DAFJson.Free;
@@ -263,24 +208,9 @@ begin
     raise Exception.Create('O Field ' + FieldName + ' não é um detail!');
 end;
 
-class function TDAFJSON.GetObjectJSON(SuperObject: ISuperObject; Name: WideString): ISuperObject;
-var
-  Item: TSuperObjectIter;
+class function TDAFJSON.GetPropertyFromJSON(Json: Variant; Name: string): Variant;
 begin
-  Result := nil;//TSuperObject.Create(stNull);
-  Name := RemoveReservedChar(Name);
-  try
-    if ObjectFindFirst(SuperObject, Item) then
-    repeat
-      if Item.key = Name then
-      begin
-        Result := Item.val;
-        Break;
-      end;
-    until not ObjectFindNext(Item);
-  finally
-    ObjectFindClose(Item);
-  end;
+  Result := TdocVariantData(Json).GetValueOrNull(StringToUTF8(Name));
 end;
 
 procedure TDAFJSON.ProcessJson(vJson: Variant; cds: TClientDataSet; FieldDef: TFieldDef; Value: Boolean);
@@ -335,9 +265,21 @@ begin
   dvdJson := TDocVariantData(vJson);
   if dvdJson.Kind = dvArray then
   begin
-    for I := 0 to dvdJson.Count - 1 do
+    FieldName := 'Value';
+    FieldValue := dvdJson.Values[0];
+    V := _JsonFast(UTF8Encode(VarToStr(FieldValue)));
+    if TDocVariantData(V).Kind = dvUndefined then
     begin
-      ProcessJson(dvdJson.Values[I], cds, FieldDef);
+      FieldType := ftString;
+      FieldSize := 32000;
+      CreateField(V, cds, FieldDef)
+    end
+    else
+    begin
+      for I := 0 to dvdJson.Count - 1 do
+      begin
+        ProcessJson(dvdJson.Values[I], cds, FieldDef);
+      end;
     end;
   end
   else if dvdJson.Kind = dvObject then
@@ -420,161 +362,43 @@ begin
       end;
 
       V := _JsonFast(UTF8Encode(VarToStr(FieldValue)));
-      if TDocVariantData(V).Kind = dvUndefined then
-        CreateField(V, cds, FieldDef)
-      else
-        CreateField(dvdJson.Values[I], cds, FieldDef);
-    end;
-  end;
-end;
-
-procedure TDAFJSON.ProcessJsonSO(var Result: TClientDataSet; joJSON: ISuperObject; FieldChild: TFieldDef);
-  procedure CreateFieldsSO(ArrayItem: TSuperAvlEntry; Result: TClientDataSet; FieldChild: TFieldDef);
-  var
-    FieldName, FieldValue: string;
-  begin
-    FieldName := ArrayItem.Name;
-    FieldValue := ArrayItem.Value.AsString;
-    if ArrayItem.Value.IsType(stArray) then
-    begin
-      if FieldChild <> nil then
-      begin
-        if (FieldChild.ChildDefs.IndexOf(FieldName) = -1) then
-          CreateFieldChildDef(FieldChild, FieldName, ftDataSet);
-
-        ProcessJsonSO(Result, ArrayItem.Value, FieldChild.ChildDefs.Find(FieldName));
-      end
-      else
-      begin
-        if (Result.FieldDefs.IndexOf(FieldName) = -1) then
-          CreateFieldDef(Result, FieldName, ftDataSet);
-
-        ProcessJsonSO(Result, ArrayItem.Value, Result.FieldDefs.Find(FieldName));
-      end;
-    end
-    else if ArrayItem.Value.IsType(stObject) then
-    begin
-      if FieldChild <> nil then
-      begin
-        if (FieldChild.ChildDefs.IndexOf(FieldName) = -1) then
-          CreateFieldChildDef(FieldChild, FieldName, ftDataSet);
-
-        ProcessJsonSO(Result, ArrayItem.Value, FieldChild.ChildDefs.Find(FieldName));
-      end
-      else
-      begin
-        if (Result.FieldDefs.IndexOf(FieldName) = -1) then
-          CreateFieldDef(Result, FieldName, ftDataSet);
-
-        ProcessJsonSO(Result, ArrayItem.Value, Result.FieldDefs.Find(FieldName));
-      end;
-    end
-    else
-    begin
-      if FieldChild = nil then
-      begin
-        if (Result.FieldDefs.IndexOf(FieldName) = -1) then
-          CreateFieldDef(Result, FieldName, ftString, FieldSise);
-      end
-      else
-      begin
-        if (FieldChild.ChildDefs.IndexOf(FieldName) = -1) then
-          CreateFieldChildDef(FieldChild, FieldName, ftString, FieldSise);
-      end;
-    end;
-  end;
-var
-  ArrayItem: TSuperAvlEntry;
-  ArrayItens: ISuperObject;
-  I: Integer;
-begin
-  if joJSON.IsType(stObject) then
-  begin
-    for ArrayItem in joJSON.AsObject do
-    begin
-      CreateFieldsSO(ArrayItem, Result, FieldChild);
-    end;
-  end
-  else if joJSON.IsType(stArray) then
-  begin
-    for I := 0 to joJSON.AsArray.Length - 1 do
-    begin
-      ArrayItens := joJSON.AsArray[I];
-      for ArrayItem in ArrayItens.AsObject do
-      begin
-        CreateFieldsSO(ArrayItem, Result, FieldChild);
+      try
+        if TDocVariantData(V).Kind = dvUndefined then
+          CreateField(V, cds, FieldDef)
+        else
+          CreateField(dvdJson.Values[I], cds, FieldDef);
+      finally
+        TDocVariantData(V).Clear;
       end;
     end;
   end;
 end;
 
-class procedure TDAFJSON.SetJson(SuperObject: ISuperObject; Name: WideString;
-  Value: Boolean);
+class procedure TDAFJSON.SetPropertyToJson(var Json: Variant; const Name: string; const Value: Variant);
 begin
-  SuperObject.B[RemoveReservedChar(Name)] := Value;
+  TDocVariantData(Json).AddValue(StringToUTF8(Name), Value);
 end;
 
-class procedure TDAFJSON.SetJson(SuperObject: ISuperObject; Name: WideString;
-  Value: Double);
+class function TDAFJSON.String2JSON(Source, LineBreak: string): string;
 begin
-  SuperObject.D[RemoveReservedChar(Name)] := Value;
-end;
-
-class procedure TDAFJSON.SetJson(SuperObject: ISuperObject; Name: WideString;
-  Value: Int64);
-begin
-  SuperObject.I[RemoveReservedChar(Name)] := Value;
-end;
-
-class procedure TDAFJSON.SetJson(SuperObject: ISuperObject; Name: WideString;
-  Value: ISuperObject);
-begin
-  SuperObject.N[RemoveReservedChar(Name)] := Value;
-end;
-
-class procedure TDAFJSON.SetJson(SuperObject: ISuperObject; Name, Value: WideString);
-begin
-  SuperObject.S[RemoveReservedChar(Name)] := Value;
+  // Stuffing para a string passar como um JSON
+  Result := Source;
+  Result := StringReplace(Result, #10, '', [rfReplaceAll]);
+  Result := StringReplace(Result, '\', '\\', [rfReplaceAll]);
+  Result := StringReplace(Result, '"', '\"', [rfReplaceAll]);
+  Result := StringReplace(Result, #9, ' ', [rfReplaceAll]);
+  Result := StringReplace(Result, #13, LineBreak, [rfReplaceAll]);
 end;
 
 function RemoveReservedChar(s: WideString): WideString;
 begin
   Result :=
-    AnsiReplaceStr(
-      AnsiReplaceStr(
-        AnsiReplaceStr(
-          AnsiReplaceStr(
-            AnsiReplaceStr(
-              AnsiReplaceStr(
-                AnsiReplaceStr(
-                  AnsiReplaceStr(
-                    AnsiReplaceStr(
-                      AnsiReplaceStr(
-                        AnsiReplaceStr(
-                          AnsiReplaceStr(
-                            AnsiReplaceStr(
-                              AnsiReplaceStr(
-                                AnsiReplaceStr(
-                                  AnsiReplaceStr(
-                                    AnsiReplaceStr(
-                                      s, #0, ''
-                                    ), #8, ''
-                                  ), #9, ''
-                                ), #10, ''
-                              ), #12, ''
-                            ), #13, ''
-                          ), #32, ''
-                        ), '"', ''
-                      ), '.', ''
-                    ), '[', ''
-                  ), ']', ''
-                ), '{', ''
-              ), '}', ''
-            ), '(', ''
-          ), ')', ''
-        ), ',', ''
-      ), ':', ''
-    );
+    AnsiReplaceStr(AnsiReplaceStr(AnsiReplaceStr(AnsiReplaceStr(AnsiReplaceStr(
+    AnsiReplaceStr(AnsiReplaceStr(AnsiReplaceStr(AnsiReplaceStr(AnsiReplaceStr(
+    AnsiReplaceStr(AnsiReplaceStr(AnsiReplaceStr(AnsiReplaceStr(AnsiReplaceStr(
+    AnsiReplaceStr(AnsiReplaceStr(s, #0, ''), #8, ''), #9, ''), #10, ''),
+    #12, ''), #13, ''), #32, ''), '"', ''), '.', ''), '[', ''), ']', ''),
+    '{', ''), '}', ''), '(', ''), ')', ''), ',', ''), ':', '');
 end;
 
 end.
